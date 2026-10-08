@@ -1,9 +1,9 @@
 package com.example.books;
 
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Positive;
 import java.net.URI;
 import java.util.List;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -13,15 +13,18 @@ import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ResponseStatusException;
 
 @RestController
 @RequestMapping("/api/books")
 public class BookController {
     private final BookRepository repository;
+    private final BookEventPublisher eventPublisher;
+    private final BookBatchService batchService;
 
-    public BookController(BookRepository repository) {
+    public BookController(BookRepository repository, BookEventPublisher eventPublisher, BookBatchService batchService) {
         this.repository = repository;
+        this.eventPublisher = eventPublisher;
+        this.batchService = batchService;
     }
 
     @GetMapping
@@ -30,32 +33,42 @@ public class BookController {
     }
 
     @GetMapping("/{id}")
-    public Book get(@PathVariable Long id) {
+    public Book get(@PathVariable @Positive(message = "Book ID must be positive") Long id) {
         return findBook(id);
     }
 
     @PostMapping
     public ResponseEntity<Book> create(@Valid @RequestBody BookRequest request) {
         Book book = repository.save(new Book(request.title(), request.author()));
+        eventPublisher.publish("CREATED", book);
         return ResponseEntity.created(URI.create("/api/books/" + book.getId())).body(book);
     }
 
     @PutMapping("/{id}")
-    public Book update(@PathVariable Long id, @Valid @RequestBody BookRequest request) {
+    public Book update(@PathVariable @Positive(message = "Book ID must be positive") Long id,
+            @Valid @RequestBody BookRequest request) {
         Book book = findBook(id);
         book.update(request.title(), request.author());
-        return repository.save(book);
+        Book saved = repository.save(book);
+        eventPublisher.publish("UPDATED", saved);
+        return saved;
+    }
+
+    @PutMapping("/batch")
+    public List<Book> updateBatch(@Valid @RequestBody BatchBookUpdateRequest request) {
+        return batchService.updateBatch(request);
     }
 
     @DeleteMapping("/{id}")
-    public ResponseEntity<Void> delete(@PathVariable Long id) {
+    public ResponseEntity<Void> delete(@PathVariable @Positive(message = "Book ID must be positive") Long id) {
         Book book = findBook(id);
         repository.delete(book);
+        eventPublisher.publish("DELETED", book);
         return ResponseEntity.noContent().build();
     }
 
     private Book findBook(Long id) {
         return repository.findById(id)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Book not found"));
+                .orElseThrow(() -> new BookNotFoundException(id));
     }
 }
